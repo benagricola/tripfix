@@ -1,0 +1,51 @@
+---
+  ranges: 
+    routable_block: 
+      - "1.2.32.0/24"
+      - "1.2.33.0/24"
+      - "1.2.34.0/24"
+      - "1.2.35.0/24"
+  actions: 
+    send_email: 
+      type: "exec"
+      cmd: "sendmail noc@helpme.com %(event_name)s: %(ip)s on subnet %(subnet)s (Group %(group)s)"
+    trigger_ddos_mitigation: 
+      type: "exec"
+      cmd: "ssh root@%(src_ip)s add-subnet-to-ddos-prefix %(subnet)s"
+  groups: 
+    squiz_uk: 
+      listen_host: "0.0.0.0"
+      listen_port: "2055"
+      sources: 
+        bdr1-site1: 
+          src_ip: "1.2.32.1"
+        bdr1-site2: 
+          src_ip: "1.2.34.1"
+      sinks: 
+        site1: 
+          host: "1.2.32.10:2056"
+          type: "json_udp"
+        site2: 
+          host: "1.2.34.10:2056"
+          type: "json_udp"
+      thresholds: 
+        host_high_pps: 
+          type: "host-abs"
+          metric: "pps"
+          high-water: 50000
+          low-water: 2000
+          expires: 300
+          ranges: 
+            - "routable_block"
+          on_high_water: 
+            send_email: 
+              delay: 0
+            trigger_ddos_mitigation: 
+              delay: 60
+          on_low_water: 
+            send_email: 
+              delay: 60
+          on_expire: 
+            disable_ddos_mitigation: 
+              delay: 0
+
