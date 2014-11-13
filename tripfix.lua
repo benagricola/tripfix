@@ -3,7 +3,6 @@ local binutil = require("binutil")
 local ipfix   = require("ipfix")
 
 local ntob = binutil.ntob
-local bton = binutil.bton
 local u8   = binutil.u8
 local u16  = binutil.u16
 local u32  = binutil.u32
