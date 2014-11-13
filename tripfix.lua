@@ -1,7 +1,14 @@
 #!/usr/bin/env luajit
 local binutil = require("binutil")
+local ipfix   = require("ipfix")
+
 local ntob = binutil.ntob
 local bton = binutil.bton
+local u8   = binutil.u8
+local u16  = binutil.u16
+local u32  = binutil.u32
+local uvar = binutil.uvar
+
 local yaml = require("yaml")
 local socket = require("socket")
 
@@ -10,9 +17,24 @@ config = yaml.load(f:read("*all"))
 f:close()
 
 local f,err = io.open("./iana_dict.yaml", "r")
-elements = yaml.load(f:read("*all"))
+constants = yaml.load(f:read("*all"))
+elements = constants.elements
 f:close()
 
+
+local function load_templates()
+    local f,err = io.open("./template_cache.yaml", "r")
+    if not f then return end
+    templates = yaml.load(f:read("*all"))
+    ipfix.templates = templates
+    f:close()
+end
+
+local function save_templates()
+    local f,err = io.open("./template_cache.yaml", "w")
+    f:write(yaml.dump(ipfix.templates))
+    f:close()
+end
 
 function rPrint(s, l, i) -- recursive Print (structure, limit, indent)
     l = (l) or 500; i = i or "";        -- default item limit, indent string
@@ -25,53 +47,9 @@ function rPrint(s, l, i) -- recursive Print (structure, limit, indent)
         if (l < 0) then break end
     end
     return l
-end     
-
-
-local function parse_ipfix_header(packet)
-    local header = {
-        ver   = bton(packet:sub(1,2)),
-        len   = bton(packet:sub(3,4)),
-        ts    = bton(packet:sub(5,8)),
-        hrts  = os.date("%c", ts),
-        seq   = bton(packet:sub(9,12)),
-        domid = bton(packet:sub(13,16)),
-    }
-    return header, packet:sub(17)
 end
 
-local function parse_ipfix_set(packet)
-    local set = {
-        id    = bton(packet:sub(1,2)),
-        len   = bton(packet:sub(3,4)),
-    }
 
-    if set.id == 2 then -- If this is a template set then parse as such
-        set.tpl_id = bton(packet:sub(5,6))
-        set.no_fields = bton(packet:sub(7,8))
-
-        local fields = {}
-        local fdata = packet:sub(9)
-        for i=0,set.no_fields do
-            local offset = (i*4)+1
-            local typ = bton(fdata:sub(offset,offset+1))
-            local vars = elements[typ] or {}
-            local field = {
-                typ = typ,
-                name = vars.name or 'Unknown',
-                data_type = vars.data_type or 'unknown',
-                data_semantic = vars.data_semantic or 'unknown',
-                data_unit = vars.unit or 'unknown',
-                len = bton(fdata:sub(offset+2,offset+3)),
-            }
-            fields[#fields+1] = field
-        end
-        set.fields = fields
-        rPrint(set)
-    end
-
-    return set, packet:sub(set.len+1)
-end
 
 local function create_group_listener(name,cfg)
     local name,sources,sinks,thresholds = name,cfg.sources,cfg.sinks,cfg.thresholds
@@ -82,7 +60,7 @@ local function create_group_listener(name,cfg)
     print("Group " .. name .. " listening on " .. listen_host .. ":" .. listen_port)
     sock:setsockname(listen_host,tonumber(listen_port))
     sock:settimeout(0.1) -- Set a nonzero timeout - we don't want to hotloop
-    return function()
+    return function(ret)
         local packet, host, port, err = sock:receivefrom()
         if not packet then -- No packets ready to be received - do nothing
             return false
@@ -90,28 +68,58 @@ local function create_group_listener(name,cfg)
         -- Parse recieved packet header
         local parsed = {}
 
-        local header, packet = parse_ipfix_header(packet)
+        local header, packet = ipfix.parse_ipfix_header(packet)
         parsed.header = header
-        local sets = {}
+
+        -- Parse packet sets while we still have some
+        local flows = {}
         while #packet > 0 do
-            set, packet = parse_ipfix_set(packet)
-            sets[#sets+1] = set
+            set, packet = ipfix.parse_ipfix_set(packet)
+            
+            -- If this is a template set, then set its' template id in global templates
+            if set.id == 2 then
+                save_templates()
+            -- Otherwise this is an options template set, skip for now
+            elseif set.id == 3 then
+                print("Options template detected, ignoring...")
+
+            -- Otherwise add it to the table of sets to be used for flow records
+            else
+                flows[#flows+1] = set.flows
+            end
         end
-        parsed.sets = sets
+        return flows
     end
 end
+
 local function create_group_statter(name,cfg)
     local name,cfg = name,cfg
-    return function()
-       --io.write("Statter") 
+    return function(sets)
+        if not sets then 
+            return false
+        end
+        for h=1,#sets do
+            local set = sets[h]
+            for i=1,#sets do
+                local fields = set[i]
+                local agg = {}
+                for j=1,#fields do
+                    local field = fields[j]
+                    agg[field.name] = field.value
+                end
+                print(agg.sourceIPv4Address .. ":" .. agg.sourceTransportPort .. " -> " .. agg.destinationIPv4Address .. ":" .. agg.destinationTransportPort .. " (" .. agg.protocolIdentifier .. ") - Bytes: " .. agg.octetDeltaCount .. " Packets: " .. agg.packetDeltaCount)
+            end
+        end
     end
 end
+
 local function create_group_eventer(name,cfg)
     local name,cfg = name,cfg
     return function()
        --io.write("Eventer") 
     end
 end
+
 local function create_group_sender(name,cfg)
     return function()
        --io.write("Sender") 
@@ -119,6 +127,8 @@ local function create_group_sender(name,cfg)
 end
 
 local groups = {}
+
+load_templates()
 
 for grpname,grpcfg in pairs(config.groups or {}) do
     local steps = {}
@@ -132,9 +142,10 @@ end
 while true do
     for i=1,#groups do
         local steps = groups[i]
+        local ret
         for j=1,#steps do
             local step = steps[j]
-            step()
+            ret = step(ret)
         end
     end
 end 
