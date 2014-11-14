@@ -3,8 +3,9 @@ local u8   = binutil.u8
 local u16  = binutil.u16
 local u32  = binutil.u32
 local uvar = binutil.uvar
+local yaml = require("yaml")
 
-local _M = { templates = {}}
+local _M = { templates = {}, config = { tpl_cache_file = nil } }
 
 local type_map = {
     unsigned8  = uvar,
@@ -12,20 +13,44 @@ local type_map = {
     unsigned32 = uvar,
     unsigned64 = uvar,
     boolean = function (raw) return raw == 1 end,
+    dateTimeSeconds = uvar,
+    dateTimeMilliseconds = uvar,
+    dateTimeMicroseconds = uvar,
+    dateTimeNanoseconds = uvar,
     ipv4Address = function (raw) return string.format("%i.%i.%i.%i", u8(raw:sub(1)),u8(raw:sub(2)),u8(raw:sub(3)),u8(raw:sub(4))) end,
     default = function (raw) return raw end,
 }
 
-function _M.parse_ipfix_value(raw,data_type)
+
+function _M.configure(config,elements)
+    _M.config = config
+    _M.elements = elements
+end
+
+function _M.load_templates()
+    local f,err = io.open(config.tpl_cache_file, "r")
+    if not f then return end
+    templates = yaml.load(f:read("*all"))
+    _M.templates = templates
+    f:close()
+end
+
+function _M.save_templates()
+    local f,err = io.open(config.tpl_cache_file, "w")
+    f:write(yaml.dump(_M.templates))
+    f:close()
+end
+
+function _M.parse_value(raw,data_type)
     if type(type_map[data_type]) == 'function' then
         return type_map[data_type](raw)
     else
-        return type_map.default()
+        return type_map.default(raw)
     end
 end
 
 
-function _M.parse_ipfix_header(packet)
+function _M.parse_header(packet)
     local header = {
         ver   = uvar(packet:sub(1,2)),
         len   = uvar(packet:sub(3,4)),
@@ -37,8 +62,71 @@ function _M.parse_ipfix_header(packet)
     return header, packet:sub(17)
 end
 
+function _M.parse_template_fields(set,data)
+    local fields = {}
+    -- For each field, pull type and length
+    for i=1,set.no_fields do
+        local typ = uvar(data:sub(1,2))
+        local len = uvar(data:sub(3,4))
+        local enterprise_id = nil
+        if typ >= 32768 then -- If enterprise bit is set
+            enterprise_id = uvar(data:sub(5,8))
+            typ = typ - 32768
+            data = data:sub(9)
+        else
+            data = data:sub(5)
+        end
 
-function _M.parse_ipfix_set(packet)
+        local vars = _M.elements[typ] or {}
+
+        local name
+        if enterprise_id == 29305 then -- This is a reverse
+            name = vars.name .. 'Reverse'
+        else
+            name = vars.name
+        end
+
+        local field = {
+            typ = typ,
+            name = name or 'Unknown',
+            data_type = vars.data_type or 'unknown',
+            data_semantic = vars.data_semantic or 'unknown',
+            data_unit = vars.unit or 'unknown',
+            enterprise_id = enterprise_id or 0,
+            len = len,
+        }
+        fields[#fields+1] = field
+    end
+    return fields
+end
+
+function _M.parse_flows(template,data)
+    local fields = template.fields
+    local flows = {}
+    -- While we still have data left
+    while #data > 0 do
+        -- Instantiate a new flow
+        local flow = {}
+
+        -- For our template fields, 
+        for i=1,#fields do
+            local field = fields[i]
+            local field_len = field.len
+            local data_type = field.data_type
+            local raw_value = data:sub(1,field_len)
+            local value = _M.parse_value(raw_value,data_type)
+            field.raw_value = raw_value
+            field.value = value
+            flow[field.typ] = field
+            data = data:sub(field_len+1)
+        end
+        flows[#flows+1] = flow
+    end
+
+    return flows
+end
+
+function _M.parse_set(packet)
     local set = {
         id    = uvar(packet:sub(1,2)),
         len   = uvar(packet:sub(3,4)),
@@ -54,41 +142,10 @@ function _M.parse_ipfix_set(packet)
         
         set_data = set_data:sub(5)
 
-        -- For each field, pull type and length
-        for i=1,set.no_fields do
-            local typ = uvar(set_data:sub(1,2))
-            local len = uvar(set_data:sub(3,4))
-            local enterprise_id = nil
-            if typ >= 32768 then -- If enterprise bit is set
-                enterprise_id = uvar(set_data:sub(5,8))
-                typ = typ - 32768
-                set_data = set_data:sub(9)
-            else
-                set_data = set_data:sub(5)
-            end
+        set.fields = _M.parse_template_fields(set,set_data)
 
-            local vars = elements[typ] or {}
-
-            local name
-            if enterprise_id == 29305 then -- This is a reverse
-                name = vars.name .. 'Reverse'
-            else
-                name = vars.name
-            end
-
-            local field = {
-                typ = typ,
-                name = name or 'Unknown',
-                data_type = vars.data_type or 'unknown',
-                data_semantic = vars.data_semantic or 'unknown',
-                data_unit = vars.unit or 'unknown',
-                enterprise_id = enterprise_id or 0,
-                len = len,
-            }
-            fields[#fields+1] = field
-        end
-        set.fields = fields
         _M.templates[set.tpl_id] = set
+        _M.save_templates()
     elseif set.id == 3 then -- If this is an options template, ignore for the moment
 
     elseif set.id >= 4 and set.id <= 255 then
@@ -97,30 +154,9 @@ function _M.parse_ipfix_set(packet)
         -- Template ID is our set.id
         local template = _M.templates[set.id]
         if not template then
-            print("Identified set with template ID " .. set.id .. " we don't have cached yet...")
+            print("Identified flow set with template ID " .. set.id .. " we don't have cached yet...")
         else
-            local fields = template.fields
-            local flows = {}
-            -- While we still have data left
-            while #set_data > 0 do
-                -- Instantiate a new flow
-                local flow = {}
-
-                -- For our template fields, 
-                for i=1,#fields do
-                    local field = fields[i]
-                    local field_len = field.len
-                    local data_type = field.data_type
-                    local raw_value = set_data:sub(1,field_len)
-                    local value = _M.parse_ipfix_value(raw_value,data_type)
-                    field.raw_value = raw_value
-                    field.value = value
-                    flow[#flow+1] = field
-                    set_data = set_data:sub(field_len+1)
-                end
-                flows[#flows+1] = flow
-            end
-            set.flows = flows
+            set.flows = _M.parse_flows(template,set_data)
         end
 
     end

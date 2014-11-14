@@ -1,10 +1,4 @@
 ---
-octet_rate: 1
-packet_rate: 2
-flow_rate: 3
-flow_hash: [4,8,7,12,11] # proto,src_addr,src_port,dst_addr,dst_port
-flow_start: 152 # flowStartMilliseconds
-flow_end: 153 # flowEndMilliseconds
 elements:
     1: 
       name: "octetDeltaCount"

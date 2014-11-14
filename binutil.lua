@@ -27,8 +27,7 @@ function _M.u64(b)
   b3, b4 = str_byte(b, 3), str_byte(b, 4)
   b5, b6 = str_byte(b, 5), str_byte(b, 6)
   b7, b8 = str_byte(b, 7), str_byte(b, 8)
-  --        2^24          2^16       2^8     2^0
-  return b1*(2^56) + b2*(2^48) + b3*(2^40) + b4*(2^32) + b5*(2^24) + b6*(2^16) + b7*(2^8) + b8
+  return b1*(2^56) + b2*(2^48) + b3*(2^40) + b4*(2^32) + b5*16777216 + b6*65536 + b7*256 + b8
 end
 
 function _M.uvar(b)
