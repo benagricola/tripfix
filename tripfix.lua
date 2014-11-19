@@ -245,7 +245,6 @@ local function create_group_statter(name,cfg)
             local avg_pps = fields[2].value / observed_duration
 
             -- Generate the hash of this flow
-            rPrint(config.ip_int_ranges)
             local ff = {
                 src_ip   = fields[8].value[1],  -- srcIPString
                 src_ipno = fields[8].value[2],  -- srcIPNumber
@@ -261,32 +260,32 @@ local function create_group_statter(name,cfg)
 
             ff.src_as         = fields[16].value
             ff.dst_as         = fields[17].value 
+
             if ff.src_as == 0 then
                 ff.src_as = local_as
             end
             if ff.dst_as == 0 then
                 ff.dst_as = local_as
             end
+
             ff.src_hostport   = ff.src_ip .. ':' .. ff.src_port
             ff.dst_hostport   = ff.dst_ip .. ':' .. ff.dst_port
 
+            -- Calculate subnet membership
             for range_name, range_prefixes in pairs(ip_ranges) do
                 for i=1, #range_prefixes, 1 do
                     local bottom, top, cidr = unpack(range_prefixes[i])
-                    print("Bottom: " .. (bottom or 'none') .. ' Top: ' .. (top or 'none')) 
                     if bottom <= ff.src_ipno and ff.src_ipno <= top then
                         ff.src_subnet = cidr
+                        ff.src_subnet_name = range_name
                     elseif bottom <= ff.dst_ipno and ff.dst_ipno <= top then
                         ff.dst_subnet = cidr
+                        ff.dst_subnet_name = range_name
                     end
                 end
             end
-            rPrint(ff)
 
-            -- Insert flow into redis if it doesnt't already exist
-            -- if not redis:exists(flow_hash) then
-            --     redis:hmset(flow_hash,ff)
-            -- end
+             -- rPrint(ff)
 
             -- Sorted set of existing timestamps referencing keys of secondary set
             -- Secondary set contains values for all data points in each timestamp
@@ -482,7 +481,6 @@ local function create_group_eventer(name,cfg)
 
             -- If this is an absolute AS check then
             if tconfig.type == 'host-abs' then
-
 
             elseif tconfig.type == 'as-abs' then
                 local as_number = tconfig.as_number

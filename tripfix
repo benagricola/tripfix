@@ -6,7 +6,7 @@ else
     ARCH=x86
 fi
 
-LUA_PREFIX="../ufo/bin/"
+LUA_PREFIX="./ufo/bin"
 LUA_BINARY_NAME="luajit"
 if [[ $OSTYPE == "linux-gnu" ]]; then
     PLATFORM=Linux

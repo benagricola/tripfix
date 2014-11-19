@@ -1,0 +1,3 @@
+[submodule "lib/ufo"]
+	path = lib/ufo
+	url = https://github.com/malkia/ufo.git
