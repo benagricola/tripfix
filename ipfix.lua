@@ -17,7 +17,9 @@ local type_map = {
     dateTimeMilliseconds = uvar,
     dateTimeMicroseconds = uvar,
     dateTimeNanoseconds = uvar,
-    ipv4Address = function (raw) return string.format("%i.%i.%i.%i", u8(raw:sub(1)),u8(raw:sub(2)),u8(raw:sub(3)),u8(raw:sub(4))) end,
+    ipv4Address = function (raw) 
+        return {string.format("%i.%i.%i.%i", u8(raw:sub(1)),u8(raw:sub(2)),u8(raw:sub(3)),u8(raw:sub(4))),uvar(raw)} end,
+
     default = function (raw) return raw end,
 }
 

@@ -1,8 +1,13 @@
 ---
   tpl_cache_file: ./template_cache.yaml
+  redis_host: "127.0.0.1"
+  redis_port: 6379
+  redis_save_delay: 300
+  history_max: 7200
+
 
   ranges: 
-    routable_block: 
+    "My Network Routable": 
       - "1.2.32.0/24"
       - "1.2.33.0/24"
       - "1.2.34.0/24"
@@ -10,22 +15,27 @@
   actions: 
     send_email: 
       type: "exec"
-      cmd: "sendmail noc@helpme.com %(event_name)s: %(ip)s on subnet %(subnet)s (Group %(group)s)"
+      cmd: "echo 'Anomaly name: ${name}\nDirection: ${direction}\nStarted at: ${started_readable}\nStopped: ${stopped_readable}\nTrigger value: ${start_value}${metric} > ${high_water}${metric} for ${trigger_duration}s\nPeak value: ${peak_value}${metric}\nReadings: ${readings}\n' | sendmail user@noc.com -f alerts@noc.com 'ANOMALY ACTIVE: ${name} - ${as_number} ${direction}'\n"
     trigger_ddos_mitigation: 
       type: "exec"
       cmd: "ssh root@%(src_ip)s add-subnet-to-ddos-prefix %(subnet)s"
+
   groups: 
-    AS12345: 
-      active_timeout: 60 # Active flows are exported from the router every 60s
-      idle_timeout: 60 # Idle flows are exported from the router every 60s
-      slot_length: 5 # Bucket flows into 5s time periods for calculations
+    "My Network": 
+      local_as: 65001
+      active_timeout: 60
+      idle_timeout: 60
+      slot_length: 5
       listen_host: "0.0.0.0"
       listen_port: "2055"
+      interesting_ports: [80, 443, 8080, 22, 123, 53]
       sources: 
         bdr1-site1: 
           src_ip: "1.2.32.1"
         bdr1-site2: 
           src_ip: "1.2.34.1"
+      graphite_host: "1.2.3.4"
+      graphite_port: "2010"
       sinks: 
         site1: 
           host: "1.2.32.10:2056"
@@ -34,24 +44,31 @@
           host: "1.2.34.10:2056"
           type: "json_udp"
       thresholds: 
-        as_high_pps:
+        "AS High BPS":
           type: "as-abs"
-          high-water: 100000
-          low-water: 50000
+          high_water: 10000
+          low_water: 7000
+          metric: bps
+          duration: 30
           expires: 300
-          as_number: 0
-          on_high_water:
+          as_number: 65001 # Our AS
+          direction: inbound
+          on_active:
             send_email:
-              delay: 0
+              delay: 30
+          on_inactive:
+            send_email:
+              delay: 30
 
-        host_high_pps: 
+        "Host High PPS": 
           type: "host-abs"
           metric: "pps"
-          high-water: 50000
-          low-water: 2000
+          high_water: 50000
+          low_water: 2000
+          duration: 60
           expires: 300
           ranges: 
-            - "routable_block"
+            - "My Network Routable"
           on_high_water: 
             send_email: 
               delay: 0
