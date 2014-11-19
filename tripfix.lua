@@ -1,6 +1,7 @@
 #!/usr/bin/env luajit
 local binutil = require("binutil")
 local ipfix   = require("ipfix")
+local ip      = require("ip")
 local ceil    = math.ceil
 
 local md5     = require("md5")
@@ -20,6 +21,17 @@ local f,err = io.open("./iana_dict.yaml", "r")
 constants = yaml.load(f:read("*all"))
 elements = constants.elements
 f:close()
+
+local ip_ranges = {}
+for name,prefixes in pairs(config.ranges) do
+    ip_ranges[name] = {}
+    for i=1,#prefixes,1 do
+        local prefix = prefixes[i]
+        ip_ranges[name][i] = ip.cidr_to_integer_range(prefix)
+    end
+end
+
+config.ip_ranges = ip_ranges
 
 function rPrint(s, l, i) -- recursive Print (structure, limit, indent)
     l = (l) or 500; i = i or "";        -- default item limit, indent string
@@ -233,6 +245,7 @@ local function create_group_statter(name,cfg)
             local avg_pps = fields[2].value / observed_duration
 
             -- Generate the hash of this flow
+            rPrint(config.ip_int_ranges)
             local ff = {
                 src_ip   = fields[8].value[1],  -- srcIPString
                 src_ipno = fields[8].value[2],  -- srcIPNumber
@@ -257,9 +270,18 @@ local function create_group_statter(name,cfg)
             ff.src_hostport   = ff.src_ip .. ':' .. ff.src_port
             ff.dst_hostport   = ff.dst_ip .. ':' .. ff.dst_port
 
-            for range_name, subnets in ipairs(ip_ranges) do
-                print(range_name)
+            for range_name, range_prefixes in pairs(ip_ranges) do
+                for i=1, #range_prefixes, 1 do
+                    local bottom, top, cidr = unpack(range_prefixes[i])
+                    print("Bottom: " .. (bottom or 'none') .. ' Top: ' .. (top or 'none')) 
+                    if bottom <= ff.src_ipno and ff.src_ipno <= top then
+                        ff.src_subnet = cidr
+                    elseif bottom <= ff.dst_ipno and ff.dst_ipno <= top then
+                        ff.dst_subnet = cidr
+                    end
+                end
             end
+            rPrint(ff)
 
             -- Insert flow into redis if it doesnt't already exist
             -- if not redis:exists(flow_hash) then
@@ -455,11 +477,15 @@ local function create_group_eventer(name,cfg)
             local now = os.time()
             local time_start, time_end = now - (6*active_timeout), now - active_timeout
 
+            local high_water, low_water, duration, expires = tconfig.high_water, tconfig.low_water, tconfig.duration, tconfig.expires
+            local metric, direction = tconfig.metric, tconfig.direction
 
             -- If this is an absolute AS check then
-            if tconfig.type == 'as-abs' then
-                local high_water, low_water, duration, expires = tconfig.high_water, tconfig.low_water, tconfig.duration, tconfig.expires
-                local as_number, metric, direction = tconfig.as_number, tconfig.metric, tconfig.direction
+            if tconfig.type == 'host-abs' then
+
+
+            elseif tconfig.type == 'as-abs' then
+                local as_number = tconfig.as_number
 
                 local slots = get_timeslots(as_stats,time_start,time_end,slot_length,as_number,metric,direction)
 
@@ -563,43 +589,11 @@ end
 
 local groups = {}
 
-local bin_masks = {}
-for i=1,32 do
-    bin_masks[tostring(i)] = bit.lshift(bit.tobit((2^i)-1), 32-i)
-end
-
-local bin_inverted_masks = {}
-for i=1,32 do
-local i = tostring(i)
-    bin_inverted_masks[i] = bit.bxor(bin_masks[i], bin_masks["32"])
-end
-
--- Convert subnets to top / bottom addresses
-local ranges = {}
-for range, prefixes in ipairs(config.ranges) do
-    ranges[range] = {}
-    for i,prefix in pairs(prefixes) do
-        local a, b, a1, a2, a3, a4, mask = prefix:find( '(%d+).(%d+).(%d+).(%d+)/(%d+)')
-        if not a then 
-            return print('Invalid IP ' .. prefix .. ' in group ' .. range) 
-        end
-        local o1,o2,o3,o4 = tonumber( a1 ), tonumber( a2 ), tonumber( a3 ), tonumber( a4 )
-
-        local ipno = o1^24 + o2^16 + o3^8 + o4
-        local nos = {}
-        nos[1] = bit.band(ipno,bin_masks[prefix])
-        nos[2] = bit.bor(nos[1],bin_inverted_masks[prefix])
-        ranges[range][i] = nos
-    end
-
-end
-
 ipfix.configure(config,elements)
 ipfix.load_templates()
 
 for grpname,grpcfg in pairs(config.groups or {}) do
     local steps = {}
-    config.ip_ranges = ranges
     steps[#steps+1] = create_group_listener(grpname,config)
     steps[#steps+1] = create_group_statter(grpname,config)
     steps[#steps+1] = create_group_eventer(grpname,config)

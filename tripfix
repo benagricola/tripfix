@@ -1,0 +1,19 @@
+#!/bin/bash
+ARCHITECTURE=$(uname -m)
+if [[ $ARCHITECTURE == "x86_64" ]]; then
+    ARCH=x64
+else
+    ARCH=x86
+fi
+
+LUA_PREFIX="../ufo/bin/"
+LUA_BINARY_NAME="luajit"
+if [[ $OSTYPE == "linux-gnu" ]]; then
+    PLATFORM=Linux
+    LUA_BINARY=$LUA_PREFIX/$PLATFORM/$ARCH/$LUA_BINARY_NAME
+elif [[ $OSTYPE == "darwin"* ]]; then
+    PLATFORM=OSX
+    LUA_BINARY=$LUA_PREFIX/$PLATFORM/$LUA_BINARY_NAME
+fi
+
+$LUA_BINARY tripfix.lua
